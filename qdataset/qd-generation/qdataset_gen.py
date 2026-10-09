@@ -89,7 +89,9 @@ def write_circuit_features_csv(folder, backends):
             header.append(model + "_gates")
         csvwriter.writerow(header)
 
-        data_path = folder + '/MQTBench_2025-11-05-20-47-45';
+        # data_path = folder + '/MQTBench_2025-11-05-20-47-45'; #Original
+        data_path = folder + '/MQTBench_2026-09-29-11-47-49'  # Updated path
+
         file_list = os.listdir(data_path)
         # Write the data rows in alphabetical order
         for file_name in sorted(file_list):
@@ -109,6 +111,8 @@ def write_circuit_features_csv(folder, backends):
                         row.append(data["depth"])
                         row.append(str(data["gates"]))
                     csvwriter.writerow(row)
+                    csvfile.flush()
+                    print(f"{file_name}", flush=True)
                 
     with open(folder + "/new_analysis.csv", "w", newline="") as f:
         w = csv.writer(f)

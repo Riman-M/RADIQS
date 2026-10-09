@@ -5,7 +5,7 @@ from .utils.Log import Log
 from .tasks.TaskStatus import TaskStatus
 from .resources import IBMQNode
 from .utils.Dataset import Dataset
-from .tasks.QAOATask import QAOATask
+# from .tasks.QAOATask import QAOATask
 import simpy
 
 __all__ = ["Broker", "QNode", "QTask", "Log", "TaskStatus", "IBMQNode", "Dataset"]
