@@ -134,7 +134,7 @@ class Log:
         # Define the header
         header = [
             "qtask_id",
-            "qtask_qubits"
+            "qtask_qubits",
             "qnode",
             "qnode_qubits",
             "arrival_time",
