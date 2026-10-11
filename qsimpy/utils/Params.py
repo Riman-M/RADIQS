@@ -1,27 +1,47 @@
 import itertools as it
+import os
 
-Qnodes = ["brisbane", "torino", "marrakesh"];
-# N_nodes = [20];
-# Task_per_set = [2];
-# Edge_prob = [0.3];
-# Node_types = [("brisbane", "torino", "marrakesh")]; # 2,3 combinations
-# Algo = ['SoftIso']
-# Weights = [[(0.5,0.5), (0.33,0.33,0.33)], [(1, 0), (0.33,0.33,0.33)], [(0, 1), (0.33,0.33,0.33)]]
-# Datasize = [50];
+Qnodes = ["brisbane", "torino", "marrakesh"]
 
-N_nodes = [10]
-Task_per_set = [4]
-Edge_prob = [0.3]
+# Held constant across all four scenarios, as in the paper.
 Node_types = [("brisbane", "torino", "marrakesh")]
-# Algo = ['SoftIso', 'CloudQC', 'GreedyDfs', 'Random', 'BeamVNE']
-Algo = ['BeamVNE']
-Weights = [[(0.5,0.5), (0.33,0.33,0.33)]]
-Datasize = [500]
+Weights = [[(0.5, 0.5), (0.33, 0.33, 0.33)]]
 
-all_combinations = list(it.product(N_nodes,
-                                   Task_per_set,
-                                   Edge_prob,
-                                   Node_types,
-                                   Algo,
-                                   Weights,
-                                   Datasize));
+# The four published scenarios, as (N_nodes, Task_per_set, Edge_prob, Datasize).
+# These are specific tuples, NOT a Cartesian product -- taking the product of
+# the union lists would also generate combinations the paper never runs
+# (2 tasks with batch 500, 10 nodes at rho=0.9, and so on).
+SCENARIOS = [
+    (10, 2, 0.3,  10),   # SP-LR
+    (20, 2, 0.9,  10),   # SP-MR
+    (10, 4, 0.3, 500),   # LP-LR
+    (20, 4, 0.9, 500),   # LP-MR
+]
+
+# Which policies to run this invocation. Set ALGOS to run the baselines once and
+# BeamVNE separately per (beam width, queue weight), so the expensive baselines
+# are not repeated for every BeamVNE configuration.
+_algos = os.environ.get("ALGOS", "SoftIso,CloudQC,GreedyDfs,Random,BeamVNE")
+Algo = [a.strip() for a in _algos.split(",") if a.strip()]
+
+# Union lists, kept defined in case anything else imports them by name.
+N_nodes = sorted({s[0] for s in SCENARIOS})
+Task_per_set = sorted({s[1] for s in SCENARIOS})
+Edge_prob = sorted({s[2] for s in SCENARIOS})
+Datasize = sorted({s[3] for s in SCENARIOS})
+
+# Same tuple order the original it.product produced:
+# (n_nodes, task_per_set, edge_prob, node_types, algo, weights, data_size)
+all_combinations = [
+    (n, t, p, nt, a, w, d)
+    for (n, t, p, d) in SCENARIOS
+    for nt in Node_types
+    for a in Algo
+    for w in Weights
+]
+
+if __name__ == "__main__":
+    print(f"{len(all_combinations)} combinations: "
+          f"{len(SCENARIOS)} scenarios x {len(Algo)} algos")
+    for c in all_combinations:
+        print("  ", c)
