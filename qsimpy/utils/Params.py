@@ -11,12 +11,27 @@ Weights = [[(0.5, 0.5), (0.33, 0.33, 0.33)]]
 # These are specific tuples, NOT a Cartesian product -- taking the product of
 # the union lists would also generate combinations the paper never runs
 # (2 tasks with batch 500, 10 nodes at rho=0.9, and so on).
-SCENARIOS = [
+_DEFAULT_SCENARIOS = [
     (10, 2, 0.3,  10),   # SP-LR
     (20, 2, 0.9,  10),   # SP-MR
     (10, 4, 0.3, 500),   # LP-LR
     (20, 4, 0.9, 500),   # LP-MR
 ]
+
+# SCENARIOS may be overridden from the environment so that a sweep over
+# workflow size or substrate density needs no edit here. Format is
+# semicolon-separated 4-tuples: "20,4,0.9,500;40,8,0.9,500".
+_env = os.environ.get("SCENARIOS", "").strip()
+if _env:
+    SCENARIOS = []
+    for item in _env.split(";"):
+        item = item.strip()
+        if not item:
+            continue
+        n, t, p_, d = item.split(",")
+        SCENARIOS.append((int(n), int(t), float(p_), int(d)))
+else:
+    SCENARIOS = _DEFAULT_SCENARIOS
 
 # Which policies to run this invocation. Set ALGOS to run the baselines once and
 # BeamVNE separately per (beam width, queue weight), so the expensive baselines
