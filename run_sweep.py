@@ -4,17 +4,17 @@ Set the flags in the CONFIG block below and run it directly:
 
     python run_sweep.py
 
-No command-line arguments and no shell script. Run it three times, changing
-WHICH each time: "size", then "softiso", then "density".
+No command-line arguments and no shell script. By default it runs all three
+sweeps back to back, so there is nothing to edit between them.
 
-Results land in sweeps/<WHICH>/ as agg_*.jsonl, one file per policy per cell,
-one JSON record per episode. Zip that whole sweeps/ folder when all three are
-done.
+Results land in sweeps/<name>/ as agg_*.jsonl, one file per policy per cell,
+one JSON record per episode. Zip the whole sweeps/ folder when it finishes.
 
 Each cell runs as its own subprocess, so one failure or timeout cannot take the
-rest of the sweep with it. Cells run one at a time on purpose: decision time is
-a reported metric, so two cells running at once would contaminate each other's
-timings.
+rest of the run with it, and the run continues from where it was if you stop it
+and start it again (see RESUME). Cells run one at a time on purpose: decision
+time is a reported metric, so two cells running at once would contaminate each
+other's timings.
 """
 
 import os
@@ -26,8 +26,13 @@ from pathlib import Path
 
 # ===================== CONFIG =====================
 
-# Which sweep to run: "size", "softiso", or "density".
-WHICH = "size"
+# Which sweeps to run, in order. All three by default. Narrow it to a single
+# name, e.g. WHICH = ["density"], to run just one.
+WHICH = ["size", "softiso", "density"]
+
+# Skip any cell whose output file already exists, so a stopped run can be
+# restarted without repeating finished cells. Set False to force a rerun.
+RESUME = True
 
 # Episodes per cell. 20 is enough for the deterministic metrics; the paper's
 # existing cells use 50. Raise if you have the time budget.
@@ -69,14 +74,14 @@ SOFTISO_CELLS = [((20, 4, 0.9, 500), 10, 3600),
                  ((20, 6, 0.9, 500),  1, 3600)]
 
 
-def build_jobs():
-    if WHICH == "softiso":
+def build_jobs(which):
+    if which == "softiso":
         return [(c, "SoftIso", {}, eps, tmo) for c, eps, tmo in SOFTISO_CELLS]
 
-    cells = SIZE_CELLS if WHICH == "size" else DENSITY_CELLS
+    cells = SIZE_CELLS if which == "size" else DENSITY_CELLS
     # SoftIso is run separately for the size sweep; it is affordable for the
     # density sweep because k stays at 4 there.
-    base = BASELINES.replace("SoftIso,", "") if WHICH == "size" else BASELINES
+    base = BASELINES.replace("SoftIso,", "") if which == "size" else BASELINES
 
     jobs = []
     for cell in cells:
@@ -86,6 +91,16 @@ def build_jobs():
                          {"BEAM_WIDTH": str(width), "QUEUE_WEIGHT": str(weight)},
                          EPISODES, TIMEOUT))
     return jobs
+
+
+def already_done(cell, algos, extra, outdir):
+    """A cell counts as done if the first policy's output file is present."""
+    n, k, rho, batch = cell
+    first = algos.split(",")[0]
+    width = extra.get("BEAM_WIDTH", "8")
+    weight = extra.get("QUEUE_WEIGHT", "0")
+    pattern = f"agg_{first}_*_{n}n_{k}t_{rho}p_{batch}b_B{width}_Q{weight}.jsonl"
+    return any(outdir.glob(pattern))
 
 
 def run_cell(cell, algos, extra, episodes, timeout, outdir):
@@ -133,23 +148,30 @@ def run_cell(cell, algos, extra, episodes, timeout, outdir):
 
 
 def main():
-    if WHICH not in ("size", "softiso", "density"):
-        print(f"WHICH must be size, softiso or density, not {WHICH!r}")
+    names = [WHICH] if isinstance(WHICH, str) else list(WHICH)
+    bad = [w for w in names if w not in ("size", "softiso", "density")]
+    if bad:
+        print(f"WHICH may only contain size, softiso or density; got {bad}")
         return 2
 
-    outdir = ROOT / "sweeps" / WHICH
-    outdir.mkdir(parents=True, exist_ok=True)
-    jobs = build_jobs()
+    plan = []
+    for name in names:
+        outdir = ROOT / "sweeps" / name
+        outdir.mkdir(parents=True, exist_ok=True)
+        plan.append((name, outdir, build_jobs(name)))
 
-    print(f"{WHICH} sweep: {len(jobs)} cells -> {outdir}")
-    for cell, algos, extra, eps, tmo in jobs:
-        print(f"    {cell}  {algos}  {extra}  {eps} ep  timeout {tmo} s")
+    total = sum(len(j) for _, _, j in plan)
+    print(f"plan: {' then '.join(names)}  ({total} cells, run one at a time)")
+    for name, outdir, jobs in plan:
+        print(f"\n  {name} -> {outdir}  ({len(jobs)} cells)")
+        for cell, algos, extra, eps, tmo in jobs:
+            print(f"    {cell}  {algos}  {extra}  {eps} ep  timeout {tmo} s")
     if DRY_RUN:
         print("\nDRY_RUN is True, nothing was run.")
         return 0
 
     # Any agg_ files left in the working directory from an earlier run would be
-    # appended to and silently mixed into this sweep.
+    # appended to and silently mixed into this one.
     stale = list(ROOT.glob("agg_*.jsonl"))
     if stale:
         print(f"\n{len(stale)} stale agg_*.jsonl in the working directory; "
@@ -158,15 +180,26 @@ def main():
         for f in stale:
             shutil.move(str(f), str(ROOT / "sweeps" / "stale" / f.name))
 
-    print()
     start = time.time()
-    results = [run_cell(c, a, x, e, t, outdir) for c, a, x, e, t in jobs]
-    ok = sum(1 for r in results if r == "ok")
-    print(f"\n{WHICH} sweep finished in {(time.time()-start)/60:.1f} min; "
-          f"{ok}/{len(results)} ok")
-    if ok < len(results):
-        print("  non-ok cells are expected for SoftIso at k=6; "
-              "check FAILED_*.log for anything else")
+    tally = {"ok": 0, "skipped": 0, "other": 0}
+    for name, outdir, jobs in plan:
+        print(f"\n===== {name} =====", flush=True)
+        for cell, algos, extra, eps, tmo in jobs:
+            if RESUME and already_done(cell, algos, extra, outdir):
+                print(f"  [skipped  ] {cell} {algos.split(',')[0]} "
+                      f"{extra} (output already present)", flush=True)
+                tally["skipped"] += 1
+                continue
+            r = run_cell(cell, algos, extra, eps, tmo, outdir)
+            tally["ok" if r == "ok" else "other"] += 1
+
+    print(f"\nall sweeps finished in {(time.time()-start)/60:.1f} min; "
+          f"{tally['ok']} ok, {tally['skipped']} skipped, "
+          f"{tally['other']} not ok")
+    if tally["other"]:
+        print("  a TIMEOUT on the SoftIso k=6 cell is expected and is itself "
+              "a datapoint; check FAILED_*.log for anything else")
+    print("\nzip the sweeps/ folder and send it")
     return 0
 
 
