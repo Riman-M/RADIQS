@@ -69,7 +69,11 @@ DENSITY_CELLS = [(20, 4, p, 500) for p in (0.3, 0.5, 0.7, 0.9)]
 # measure it where it is measurable and record a bound where it is not: the
 # k=6 cell is expected to come back TIMEOUT, and that is the datapoint.
 # (cell, episodes, timeout seconds)
-SOFTISO_CELLS = [((20, 4, 0.9, 500), 10, 3600),
+# k=4 runs the same 20 episodes as the size sweep so that wait time, which
+# accumulates across episodes, is comparable against the other policies at
+# that k. k=5 and k=6 are for the growth and ceiling argument, where only
+# decision time is read, so a shorter run is enough.
+SOFTISO_CELLS = [((20, 4, 0.9, 500), 20, 7200),
                  ((20, 5, 0.9, 500),  5, 7200),
                  ((20, 6, 0.9, 500),  1, 3600)]
 
@@ -133,17 +137,13 @@ def run_cell(cell, algos, extra, episodes, timeout, outdir):
     elapsed = (time.time() - start) / 60.0
 
     moved = 0
-    for f in ROOT.glob("agg_*.jsonl"):
-        shutil.move(str(f), str(outdir / f.name))
-        moved += 1
-    for f in ROOT.glob("rngcheck_*.csv"):
-        try:
-            f.unlink()
-        except OSError:
-            pass
+    for pattern in ("agg_*.jsonl", "rngcheck_*.csv"):
+        for f in ROOT.glob(pattern):
+            shutil.move(str(f), str(outdir / f.name))
+            moved += 1
 
-    print(f"  [{status:9s}] {tag:36s} {elapsed:7.1f} min  {moved} file(s)",
-          flush=True)
+    print(f"  [{status:9s}] {tag:36s} {elapsed:7.1f} min  "
+          f"{moved} file(s) kept", flush=True)
     return status
 
 
@@ -170,15 +170,21 @@ def main():
         print("\nDRY_RUN is True, nothing was run.")
         return 0
 
-    # Any agg_ files left in the working directory from an earlier run would be
-    # appended to and silently mixed into this one.
-    stale = list(ROOT.glob("agg_*.jsonl"))
+    # Both output kinds are opened in append mode by the evaluator, so anything
+    # left in the working directory from an earlier run would be appended to
+    # and silently mixed into this one. They are moved, never deleted: the
+    # rngcheck files carry the substrate hashes the pairing analysis rests on.
+    stale = list(ROOT.glob("agg_*.jsonl")) + list(ROOT.glob("rngcheck_*.csv"))
     if stale:
-        print(f"\n{len(stale)} stale agg_*.jsonl in the working directory; "
-              f"moving them to sweeps/stale/ before starting")
-        (ROOT / "sweeps" / "stale").mkdir(parents=True, exist_ok=True)
+        staledir = ROOT / "sweeps" / "stale"
+        staledir.mkdir(parents=True, exist_ok=True)
+        print(f"\n{len(stale)} stale output file(s) in the working directory; "
+              f"moving them to sweeps/stale/ before starting (not deleting)")
         for f in stale:
-            shutil.move(str(f), str(ROOT / "sweeps" / "stale" / f.name))
+            target = staledir / f.name
+            if target.exists():
+                target = staledir / (f.stem + "_prev" + f.suffix)
+            shutil.move(str(f), str(target))
 
     start = time.time()
     tally = {"ok": 0, "skipped": 0, "other": 0}
