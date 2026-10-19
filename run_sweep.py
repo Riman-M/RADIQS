@@ -113,6 +113,10 @@ def run_cell(cell, algos, extra, episodes, timeout, outdir):
     env["SCENARIOS"] = f"{n},{k},{rho},{batch}"
     env["ALGOS"] = algos
     env["EPISODES"] = str(episodes)
+    # The evaluator reconfigures its stdout to UTF-8. Without this the child
+    # may still pick the console code page for other streams, and on Windows
+    # the parent would then have to guess.
+    env["PYTHONIOENCODING"] = "utf-8"
     env.update(extra)
 
     tag = f"{n}n_{k}t_{rho}p_{batch}b_{algos.split(',')[0]}"
@@ -121,9 +125,15 @@ def run_cell(cell, algos, extra, episodes, timeout, outdir):
 
     start = time.time()
     try:
+        # encoding is given explicitly: text=True alone decodes with the
+        # locale codec, which on Windows is cp1252 and raises
+        # UnicodeDecodeError on the evaluator's UTF-8 output. That exception
+        # lands in subprocess's reader thread, where it cannot be caught here
+        # and silently costs the captured log.
         proc = subprocess.run([sys.executable, "evaluator_networked.py"],
                               env=env, cwd=str(ROOT), capture_output=True,
-                              text=True, timeout=timeout)
+                              text=True, encoding="utf-8", errors="replace",
+                              timeout=timeout)
         status = "ok" if proc.returncode == 0 else f"exit {proc.returncode}"
         if proc.returncode != 0:
             (outdir / f"FAILED_{tag}.log").write_text(
